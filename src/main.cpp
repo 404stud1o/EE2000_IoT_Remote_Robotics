@@ -148,11 +148,13 @@ void setup() {
   } 
   else if (esp_now_add_peer(&armInfo) == ESP_OK) {
     Serial.println("Device Connected via ESP-NOW.");
+    digitalWrite(PIN_CLAW_LED, HIGH);
+    delay(50);
+    digitalWrite(PIN_CLAW_LED, LOW);
     return;
   }
 }
 
-// 
 unsigned long prevMicros = 0;
 
 void loop() {
