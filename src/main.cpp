@@ -28,8 +28,7 @@ typedef struct struct_message {
   bool  clawRelease;
 } struct_message;
 
-struct_message  sendData;
-int i = 0;
+struct_message sendData;
 
 // MPU6050 Setup
   // Calibration Variables
@@ -75,7 +74,7 @@ void calibrateMPU() {
   // Serial display calibration results
   Serial.println("MPU Calibration Complete.");
 
-  Serial.print("Gyroscope Offsets: ");
+  Serial.print("Gyroscope Offsets:     ");
   Serial.print(sensorOffsets.offsGyroX); Serial.print(", ");
   Serial.print(sensorOffsets.offsGyroY); Serial.print(", ");
   Serial.println(sensorOffsets.offsGyroZ);
@@ -87,11 +86,21 @@ void calibrateMPU() {
 }
 
 // Data delivery status serial output
-void DataDeliveryStat(const uint8_t *mac_addr, esp_now_send_status_t espNOWstatus) {
-  Serial.print("Packet \t"); 
-  Serial.print(i);
-  Serial.print("Send Status: \t");
+void DataDeliveryStat(const uint8_t * armMACAddr, esp_now_send_status_t espNOWstatus) {
+  Serial.print("Packet Send Status: \t");
   Serial.println(espNOWstatus == ESP_NOW_SEND_SUCCESS ? "Delivery Successful" : "Delivery Failed");
+}
+
+// Assign time and velocity variables globally to prevent reset on loop iteration
+unsigned long prevMicros = 0;
+float veloX = 0, veloY = 0, veloZ = 0;
+
+// Sensor data deadzones to prevent small hand movements from affecting  arm
+const float accelDeadZone = 0.02f;
+const float tiltDeadZone = 0.03f;
+
+float addDeadZone(float val, float threshold) {
+    return (fabs(val) < threshold) ? 0.0f : val;
 }
 
 void setup() {
@@ -127,14 +136,16 @@ void setup() {
   } 
   else if (esp_now_init() == ESP_OK) {
     Serial.println("ESP-NOW Initialization Complete.");
-    return;
+    digitalWrite(PIN_CLAW_LED, HIGH);
+    delay(150);
+    digitalWrite(PIN_CLAW_LED, LOW);
   }
 
   // Serial display MAC address
   Serial.print("Controller Device MAC Address: ");
   Serial.print(WiFi.macAddress());
   Serial.print(" | Arm Device MAC Address: ");
-  Serial.println(armMACAddr[6]);
+  Serial.println(armMACAddr[5]);
 
   // Register Arm device as receiver
   esp_now_register_send_cb(DataDeliveryStat);
@@ -148,27 +159,20 @@ void setup() {
   } 
   else if (esp_now_add_peer(&armInfo) == ESP_OK) {
     Serial.println("Device Connected via ESP-NOW.");
-    digitalWrite(PIN_CLAW_LED, HIGH);
-    delay(50);
-    digitalWrite(PIN_CLAW_LED, LOW);
-    return;
   }
 }
 
-unsigned long prevMicros = 0;
-
 void loop() {
-  // Read SW2&3 (LOW = pressed, for Input Pull-Up)
-  bool isGrabbing  = !digitalRead(PIN_SW2_GRAB);
-  bool isReleasing = !digitalRead(PIN_SW3_RELS);
+  // dt calculation for velocity
+  unsigned long currentMicros = micros();
 
-  // Control LED
-  if (isGrabbing || isReleasing) {
-    digitalWrite(PIN_CLAW_LED, HIGH);
-  } 
-  else {
-    digitalWrite(PIN_CLAW_LED, LOW);
+  if (prevMicros == 0) {
+    prevMicros = currentMicros;
+    return;
   }
+
+  float dt = (currentMicros - prevMicros) / 1000000.0; 
+  prevMicros = currentMicros; 
   
   // Read MPU6050 data
   sensors_event_t    gyr,  accel,  temp;
@@ -179,46 +183,48 @@ void loop() {
 
   if (tempdegC > 37.5) { 
     digitalWrite(PIN_CLAW_LED, HIGH);
-    delay(500);
+    delay(750);
     digitalWrite(PIN_CLAW_LED, LOW);
-    delay(500);
+    delay(750);
     Serial.println("Warning: High Temperature on MPU6050!");
   }
 
   // Process data w/ offsets
-  float tiltX = gyr.gyro.x - sensorOffsets.offsGyroX;
-  float tiltY = gyr.gyro.y - sensorOffsets.offsGyroY;
-  float tiltZ = gyr.gyro.z - sensorOffsets.offsGyroZ;
+  float tiltX = addDeadZone(gyr.gyro.x - sensorOffsets.offsGyroX, tiltDeadZone);
+  float tiltY = addDeadZone(gyr.gyro.y - sensorOffsets.offsGyroY, tiltDeadZone);
+  float tiltZ = addDeadZone(gyr.gyro.z - sensorOffsets.offsGyroZ, tiltDeadZone);
 
   float accelX = accel.acceleration.x - sensorOffsets.offsAccelX;
   float accelY = accel.acceleration.y - sensorOffsets.offsAccelY;
   float accelZ = accel.acceleration.z - sensorOffsets.offsAccelZ;
 
-  // dt calculation for velocity
-  unsigned long currentMicros = micros();
-  
-  if (prevMicros == 0) {
-    prevMicros = currentMicros;
-    return; 
-  }
-
-  float dt = (currentMicros - prevMicros) / 1000000.0;
-  prevMicros = currentMicros;
-
   // Velocity calculation
-  float veloX = accelX * dt; 
-  float veloY = accelY * dt; 
-  float veloZ = accelZ * dt; 
+  veloX = accelX * dt; 
+  veloY = accelY * dt; 
+  veloZ = accelZ * dt; 
+
+  // Read SW2&3 (LOW = pressed, for Input Pull-Up)
+  bool isGrabbing  = !digitalRead(PIN_SW2_GRAB);
+  bool isReleasing = !digitalRead(PIN_SW3_RELS);
+
+  // Control Claw LED
+  if (isGrabbing || isReleasing) {
+    digitalWrite(PIN_CLAW_LED, HIGH);
+  } 
+  else {
+    digitalWrite(PIN_CLAW_LED, LOW);
+  }
 
   // Serial output all sent data
   Serial.print("Tilt: \t");
   Serial.print(tiltX); Serial.print(", ");
   Serial.print(tiltY); Serial.print(", ");
   Serial.println(tiltZ);
-  Serial.print("Velocity  : \t");
+  Serial.print("Velo: \t");
   Serial.print(veloX); Serial.print(", ");
   Serial.print(veloY); Serial.print(", "); 
   Serial.println(veloZ);
+  Serial.print("dt: \t"); Serial.println(dt);
   Serial.print("Claw: \t");
   if (isGrabbing) {
     Serial.println("Grabbing");
@@ -242,6 +248,5 @@ void loop() {
 
   // Send command
   esp_now_send(armMACAddr, (uint8_t *) &sendData, sizeof(sendData));
-  i++;
   delay(250);
 }
