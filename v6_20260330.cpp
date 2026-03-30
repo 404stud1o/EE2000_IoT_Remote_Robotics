@@ -145,7 +145,7 @@ void setup() {
   Serial.print("Controller Device MAC Address: ");
   Serial.print(WiFi.macAddress());
   Serial.print(" | Arm Device MAC Address: ");
-  Serial.println(armMACAddr[5]);
+  Serial.println(armMACAddr);
 
   // Register Arm device as receiver
   esp_now_register_send_cb(DataDeliveryStat);
